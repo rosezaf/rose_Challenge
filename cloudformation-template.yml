@@ -1,0 +1,147 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  AMI:
+    Description: AMI used to create EC2 instances
+    Type: String
+    Default: ami-071bcaef2ba53da20
+  InstanceType:
+    Description: EC2 instance family
+    Type: String
+    Default: c5.large
+  AssignedRole:
+    Description: IAM Role to assign to instances in this auto scaling group. 
+    Type: String
+  Vpc:
+    Description: Preferred VPC
+    Type: 'AWS::EC2::VPC::Id'
+    MinLength: 4
+  VpcEc2Subnet1:
+    Description: EC2 subnet 1(AZ-a)
+    Type: AWS::EC2::Subnet::Id
+    MinLength: 4
+  VpcEc2Subnet2:
+    Description: EC2 subnet 2(AZ-c)
+    Type: AWS::EC2::Subnet::Id
+    MinLength: 4
+  EC2KeyName:
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    MinLength: 4
+  Ec2AutoscaleMinSize:
+    Description: AutoScalingGroup MinSize
+    Type: String
+    Default: '1'
+  Ec2AutoscaleMaxSize:
+    Description: AutoScalingGroup MaxSize
+    Type: String
+    Default: '1'
+  Ec2AutoscaleDesiredCapacity:
+    Description: AutoScalingGroup DesiredCapacity
+    Type: String
+    Default: '1'
+Resources:
+  SecurityGrp:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Allow http/https to client host
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          FromPort: 80
+        - IpProtocol: tcp
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          FromPort: 22
+        - IpProtocol: tcp
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          FromPort: 443
+  Ec2InstanceLaunchconfig:
+    Type: 'AWS::AutoScaling::LaunchConfiguration'
+    Properties:
+      KeyName: !Ref EC2KeyName
+      ImageId: !Ref AMI
+      SecurityGroups:
+        - !Ref SecurityGrp
+      InstanceType: !Ref InstanceType
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: '30'
+      UserData: !Base64 
+        'Fn::Join':
+          - ''
+          - - |
+              #!/bin/bash -ex
+            - |
+              echo "userdata_start" > /tmp/userdata.log
+            - |
+              echo "nameserver 8.8.8.8" >>/etc/resolv.conf
+            - |
+              apt-get -y upgrade > /tmp/userdata.log
+            - |
+              apt-get -y install software-properties-common > /tmp/userdata.log
+            - |
+              apt-add-repository ppa:ansible/ansible -y > /tmp/userdata.log
+            - |
+              apt-get -y update > /tmp/userdata.log
+            - |
+              apt-get -y install ansible > /tmp/userdata.log
+            - >
+              curl https://rose-testchallengebucket01.s3.us-east-2.amazonaws.com/main.yml >
+              /home/ubuntu/main.yml
+            - |+
+
+            - >
+              ansible-playbook /home/ubuntu/main.yml > /tmp/userdata.log
+            - |+
+
+            - cfn-signal -e 0 -r "user data setup complete" 
+            - '#EOF'
+  Ec2InstanceAutoScalingGroup:
+    Type: 'AWS::AutoScaling::AutoScalingGroup'
+    Properties:
+      VPCZoneIdentifier:
+      - !Ref 'VpcEc2Subnet1'
+      - !Ref 'VpcEc2Subnet2'
+      MinSize: !Ref 'Ec2AutoscaleMinSize'
+      MaxSize: !Ref 'Ec2AutoscaleMaxSize'
+      DesiredCapacity: !Ref 'Ec2AutoscaleDesiredCapacity'
+      LaunchConfigurationName: !Ref 'Ec2InstanceLaunchconfig'
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 120
+      TargetGroupARNs:
+      - !Ref TargetGroup
+  EC2Loadbalancer:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      IpAddressType: ipv4
+      SecurityGroups: 
+      - !Ref SecurityGrp
+      Subnets:
+      - !Ref 'VpcEc2Subnet1'
+      - !Ref 'VpcEc2Subnet2'
+      Type: application
+      Scheme: internet-facing
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref Vpc
+      TargetType: instance
+      HealthCheckEnabled: True
+      Port: 80
+      Protocol: HTTP
+      HealthCheckPath: '/api/HealthCheckPath/'
+      HealthCheckIntervalSeconds: 300  
+      UnhealthyThresholdCount: 10
+  Listener1:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties: 
+      DefaultActions: 
+      - TargetGroupArn : !Ref TargetGroup
+        Type: forward
+      LoadBalancerArn: !Ref EC2Loadbalancer
+      Port: 80
+      Protocol: HTTP
+      

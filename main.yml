@@ -1,0 +1,21 @@
+---
+- hosts: localhost
+  become: yes
+  become_method: sudo
+  remote_user: ubuntu
+  vars: 
+   - Mytitle: "Hello World"
+   - htmlbody: "Hello World!"
+  tasks:
+  - name: install python 2
+    raw: test -e /usr/bin/python || (apt -y update && apt install -y python-minimal)
+  - name: Nginx setup
+     apt: pkg=nginx state=installed update_cache=true
+   - name:
+    git:
+      repo: https://github.com/rosezaf/rose_Challenge.git
+      dest: /home/ubuntu/code/
+   - name: index.html copy
+     template: src=/home/ubuntu/code/index.html.j2 dest=/usr/share/nginx/html/index.html
+  - name: restart nginx
+    service: name=nginx state=restarted
